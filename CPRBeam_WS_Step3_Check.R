@@ -6,6 +6,7 @@
 ################################################################################
 
 #https://website.whoi.edu/cpr-beams/
+#https://doi.mba.ac.uk/data/3567
 #https://drive.google.com/drive/u/0/folders/1FopWXQNcl4reXZtT5QPUmLUlFO911373
 
 # translating Pierre Helaouet MATLAB code to R 
@@ -33,6 +34,16 @@ load("CPR_Data_CPRBeam.RData")
 length(ls()) == length(list.files("raw/CPRBeam_DataExtract", pattern = "\\.csv$"))
 ## Check that all tables have the correct dimensions
 dim(Data_LargeZooplankton)
+
+## 10 files 
+#* Data = data + time 
+#** Sample ID = 3 num; 2 letters (route)
+#** Column names for taxa are numeric, have to match w taxa name
+#* List = taxa list
+#** DRI = tells you which year that specific taxa was started to be counted/ID
+#* Taxo = taxa list + taxonomic hierarchy
+
+# 0s in data = real 0s
 
 ## ------------------------------------------ ##
 #           --- 4) Crude map -----
