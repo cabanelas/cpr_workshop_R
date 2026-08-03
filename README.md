@@ -1,6 +1,6 @@
 # CPR-BEAMS Workshop — MATLAB → R
 
-R translation of the analysis workflow taught at the **Continuous Plankton Recorder (CPR) Workshop 2025** (CPR-BEAMS), for exploring and analyzing CPR zooplankton and phytoplankton data.
+R translation of the analysis workflow taught at the **[Continuous Plankton Recorder (CPR) Workshop 2025](https://website.whoi.edu/cpr-beams/cpr-workshop/workshop2025/)** (CPR-BEAMS), for exploring and analyzing CPR zooplankton and phytoplankton data.
 
 The original workflow was written in MATLAB by **Pierre Hélaouët** (Marine Biological Association). This repository ports those scripts to R so the same steps — loading, checking, spatial trimming, time-series construction, taxon aggregation, and gap-filling in time and space — can be run in an open, reproducible R environment.
 
