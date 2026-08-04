@@ -39,7 +39,7 @@ Expected local layout:
 
 ```
 raw/CPRBeam_DataExtract/   # the *.csv extract (input to Step 2)
-CPR_Data_CPRBeam.RData     # written by Step 2, read by Steps 3–8
+CPR_Data_CPRBeam.RData     # written by Step 2, read by Steps 3–9
 output/                    # optional exported CSVs / figures
 ```
 
@@ -57,7 +57,7 @@ Scripts are numbered to run in order. Each R script names the MATLAB file it tra
 | `CPRBeam_WS_Step5_Timeseries.R`    | `Prog_CPRBeam_WS_Step5_Timeseries.m`    | Build a single-taxon (e.g. *Calanus finmarchicus*) monthly time series; force full Year × Month grid. |
 | `CPRBeam_WS_Step6_AggregatedTaxa.R`| `Prog_CPRBeam_WS_Step6_AggregatedTaxa.m`| Aggregate groups (e.g. all large copepods, all Calanidae) and build their time series. |
 | `CPRBeam_WS_Step7_RegulInTime.R`   | `Prog_CPRBeam_WS_Step7_RegulInTime.m`   | Fill gaps in time: linear, pchip, makima (Akima), and the "Colebrook" method. |
-| `CPRBeam_WS_Step8_RegulInSpace.R`  | `Prog_CPRBeam_WS_Step8_RegulInSpace.m`  | Regularize in space: simple grid binning (IDW still to do). |
+| `CPRBeam_WS_Step8_RegulInSpace.R`  | `Prog_CPRBeam_WS_Step8_RegulInSpace.m`  | Regularize in space: simple grid binning and IDW interpolation. |
 | `CPRBeam_WS_Step9_NightDay.R`      | `Prog_CPRBeam_WS_Step9_NightDay.m`      | Solar elevation per sample; split day vs. night abundances. |
 
 **Helper functions** (MATLAB originals in repo; R equivalents noted):
@@ -65,16 +65,16 @@ Scripts are numbered to run in order. Each R script names the MATLAB file it tra
 | MATLAB function | Role | R equivalent |
 |-----------------|------|--------------|
 | `f_CPRBeam_kml2struct.m` | Import `.kml` polygon | Replaced with `sf::st_read()` in Step 4. |
-| `f_CPRBeam_pos2dist.m`   | Great-circle distance between lat/lon pairs (used by Step 8 IDW) | **Not yet ported.** |
-| `f_CPRBeam_SolarAzEl.m`  | Solar azimuth / elevation from UTC + position (used by Step 9) | **Not yet ported.** |
-
+| `f_CPRBeam_pos2dist.m`   | Great-circle distance between lat/lon pairs (used by Step 8 IDW) | Ported to `f_CPRBeam_pos2dist.R`. |
+| `f_CPRBeam_SolarAzEl.m`  | Solar azimuth / elevation from UTC + position (used by Step 9) | Ported to `f_CPRBeam_SolarAzEl.R`. (`oce::sunAngle()` is an equivalent alternative.) |
 ---
 
 ## Running the workflow
 
 1. Place the CSV extract in `raw/CPRBeam_DataExtract/`.
 2. Run **Step 2** once to generate `CPR_Data_CPRBeam.RData`.
-3. Run Steps 3–8 in order (each is standalone after Step 2 — it reloads the `.RData`).
+3. Run Steps 3–9 in order (each is standalone after Step 2 — it reloads the `.RData`).
+
 Open the project via its `.Rproj` file so the working directory is set to the project root; all paths in the scripts are relative to it.
 
 ---
@@ -93,6 +93,7 @@ By step (beyond `dplyr` / `ggplot2` / `tidyr`, which are used throughout):
 - **Step 4** — `sf`, `sp`, `purrr`, `viridis`, `RColorBrewer`
 - **Step 5–6** — `viridis`, `scales`
 - **Step 7** — `signal` (pchip), `akima` (makima-style interpolation)
+- **Step 9** — `patchwork` (compose the heatmap + marginal bars); `oce` *(optional, alternative solar-elevation source)*
 
 `rnaturalearthhires` is on GitHub:
 
@@ -109,12 +110,10 @@ remotes::install_github("ropensci/rnaturalearthhires")
 - Steps 2–7 fully translated.
 - Step 4: all three area-selection methods (rectangle, `.kml` polygon, ICES shapefiles).
 - Step 7: linear, pchip, makima, and Colebrook interpolation.
-- Step 8: simple spatial binning.
+- Step 8: simple spatial binning, IDW interpolation, and all comparison maps (raw vs. regularized, sampling effort). `f_CPRBeam_pos2dist` ported to R.
+- Step 9: per-sample solar elevation and day vs. night abundance split. `f_CPRBeam_SolarAzEl` ported to R.
 
 **To do**
-- **Step 8 — IDW**: inverse-distance-weighting section, plus the regularized-vs-raw comparison maps (MATLAB block from ~line 119). Requires porting `f_CPRBeam_pos2dist`.
-- **Step 9 — Night/Day**: solar-elevation calculation and day/night abundance split. Requires porting `f_CPRBeam_SolarAzEl`.
-- Uncomment CSV exports in Step 5 (`output/`).
 - Use `here::here()` for paths instead of relative paths
 
 ---
