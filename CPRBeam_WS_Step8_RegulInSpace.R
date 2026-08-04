@@ -19,6 +19,12 @@
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(sf)             
+library(rnaturalearth)  
+library(scales)
+
+# helper ported from f_CPRBeam_pos2dist.m (used by the IDW section)
+source("f_CPRBeam_pos2dist.R")
 
 ## ------------------------------------------ ##
 #            Data -----
@@ -131,6 +137,7 @@ V_Lat <- seq(50, 61, by = V_Step)
 V_Lon <- seq(-4, 10, by = V_Step)
 
 # --- Create input variable ---
+# T_Extract cols after dropping Sample: 1=Lat 2=Lon 3=Year 4=Month ... 8=CFIN
 V_Interp <- as.matrix(T_Extract[, -1])  
 
 # --- Pre-dimension output arrays ---
@@ -139,18 +146,23 @@ M_Abun <- array(NA_real_, dim = dims)
 M_SampEff <- array(NA_real_, dim = dims)
 
 # --- Create coordinate matrices ---
-M_Lat <- matrix(rep(V_Lat, each = length(V_Lon)), nrow = length(V_Lat), ncol = length(V_Lon))
-M_Lon <- matrix(rep(V_Lon, times = length(V_Lat)), nrow = length(V_Lat), ncol = length(V_Lon), byrow = TRUE)
+# M_Lat <- matrix(rep(V_Lat, each = length(V_Lon)), nrow = length(V_Lat), ncol = length(V_Lon))
+# M_Lon <- matrix(rep(V_Lon, times = length(V_Lat)), nrow = length(V_Lat), ncol = length(V_Lon), byrow = TRUE)
+
+M_Lat <- matrix(rep(V_Lat, times = length(V_Lon)),
+                nrow = length(V_Lat), ncol = length(V_Lon))   # cols = V_Lat
+M_Lon <- matrix(rep(V_Lon, each  = length(V_Lat)),
+                nrow = length(V_Lat), ncol = length(V_Lon))   # rows = V_Lon
 
 # --- Loop over years, months, and spatial bins ---
 for (ii in seq_along(V_YearWindow)) {
   # Subset data for current year
-  temp <- V_Interp[V_Interp[, 3] == V_YearWindow[ii], ]
+  temp <- V_Interp[V_Interp[, 3] == V_YearWindow[ii], , drop = FALSE]
   
   # Loop over each month (1-12)
   for (jj in 1:12) {
     # subset for the current month
-    temp2 <- temp[temp[, 4] == jj, ]
+    temp2 <- temp[temp[, 4] == jj, , drop = FALSE]
     
     # Loop over each longitude bin
     for (kk in seq_along(V_Lon)) {
@@ -188,8 +200,176 @@ S_Grid <- list(
 )
 
 ## ------------------------------------------ ##
-#   Graph  -----
+#   Graph (simple binning)  -----
 ## ------------------------------------------ ##
 
-# NEED TO ADD THIS PART
-# MATLAB LINE 119 
+# Basemap (land polygons) for the North Sea region
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# --- Collapse 4D array [Lat, Lon, Month, Year] down to 2D [Lat, Lon] ---
+# MATLAB: mean over months (dim 3), then mean over years.
+# apply() keeps the listed margins and averages across the rest.
+M_Map3D_Abun <- apply(S_Grid$M_Abun, c(1, 2, 4), mean, na.rm = TRUE) # -> [Lat, Lon, Year]
+M_Map2D_Abun <- apply(M_Map3D_Abun,  c(1, 2),    mean, na.rm = TRUE) # -> [Lat, Lon]
+
+M_Map3D_SampEff <- apply(S_Grid$M_SampEff, c(1, 2, 4), mean, na.rm = TRUE)
+M_Map2D_SampEff <- apply(M_Map3D_SampEff,  c(1, 2),    mean, na.rm = TRUE)
+# could do sum instead^
+
+# apply() returns NaN for all-NA cells; make them NA so they drop out of plots
+M_Map2D_Abun[is.nan(M_Map2D_Abun)]       <- NA
+M_Map2D_SampEff[is.nan(M_Map2D_SampEff)] <- NA
+
+# --- Long data frame of grid nodes for plotting ---
+# expand.grid(Lat, Lon) varies Lat fastest, matching column-major as.vector()
+grid_df <- expand.grid(Lat = V_Lat, Lon = V_Lon)
+grid_df$Abun    <- as.vector(M_Map2D_Abun)
+grid_df$SampEff <- as.vector(M_Map2D_SampEff)
+
+# Common map scaffolding
+base_map <- function(title) {
+  list(
+    geom_sf(data = world, fill = "grey50", color = NA),
+    coord_sf(xlim = c(-4.5, 10), ylim = c(50, 61), expand = FALSE),
+    labs(title = title, x = NULL, y = NULL),
+    theme_minimal(base_size = 14)
+  )
+}
+
+# 1) Map the original (raw) data
+ggplot() +
+  geom_point(data = T_Extract,
+             aes(Longitude, Latitude, color = log10(CFIN + 1)),
+             size = 2, alpha = 0.5) +
+  scale_color_viridis_c(limits = c(0, 2), oob = squish,
+                        name = expression(log[10]*"(abundance + 1)")) +
+  base_map("Original data")
+
+# 2) Map the regularised (binned) data
+ggplot() +
+  geom_tile(data = grid_df,
+            aes(Lon, Lat, fill = log10(Abun + 1)),
+            width = V_Step, height = V_Step) +
+  scale_fill_viridis_c(limits = c(0, 2), oob = squish, na.value = NA,
+                       name = expression(log[10]*"(abundance + 1)")) +
+  base_map("Regularised (0.5 deg binning)")
+
+# 3) Map the number of samples per node
+ggplot() +
+  geom_tile(data = grid_df,
+            aes(Lon, Lat, fill = SampEff),
+            width = V_Step, height = V_Step) +
+  scale_fill_viridis_c(limits = c(0, 50), oob = squish, na.value = NA,
+                       name = "Samples per node") +
+  base_map("Sampling effort per node")
+
+## ------------------------------------------ ##
+#   Regularise in space with IDW  -----
+## ------------------------------------------ ##
+
+# --- Set-up regularisation ---
+V_YearWindow <- 2000:2022      # IDW uses the more recent, better-sampled period
+V_Step <- 0.5
+V_Lat <- seq(50, 61, by = V_Step)
+V_Lon <- seq(-4, 10, by = V_Step)
+
+# --- Input variable (same column layout as above) ---
+V_Interp <- as.matrix(T_Extract[, -1])
+
+# --- Grid-node coordinate matrices (same convention as the binning fix) ---
+M_Lat <- matrix(rep(V_Lat, times = length(V_Lon)),
+                nrow = length(V_Lat), ncol = length(V_Lon))
+M_Lon <- matrix(rep(V_Lon, each  = length(V_Lat)),
+                nrow = length(V_Lat), ncol = length(V_Lon))
+node_lat <- as.vector(M_Lat)   # column-major, so node kk == matrix cell kk
+node_lon <- as.vector(M_Lon)
+n_nodes  <- length(node_lat)
+
+# --- IDW settings ---
+V_r     <- 50   # search radius in km
+V_nSamp <- 0    # 0 = use ALL samples within the radius; >0 = nearest N only
+power   <- 2    # inverse-distance power (d^-2)
+
+# --- Pre-dimension output ---
+M_Abun_IDW <- array(NA_real_,
+                    dim = c(length(V_Lat), length(V_Lon), 12, length(V_YearWindow)))
+
+# --- Loops ---
+for (ii in seq_along(V_YearWindow)) {          # each year
+  temp <- V_Interp[V_Interp[, 3] == V_YearWindow[ii], , drop = FALSE]
+  
+  for (jj in 1:12) {                           # each month
+    temp2 <- temp[temp[, 4] == jj, , drop = FALSE]
+    temp_M <- rep(NA_real_, n_nodes)
+    
+    if (nrow(temp2) > 0) {                      # skip empty year/month subsets
+      samp_lat <- temp2[, 1]
+      samp_lon <- temp2[, 2]
+      samp_ab  <- temp2[, 8]
+      
+      for (kk in seq_len(n_nodes)) {           # each grid node
+        # distance from this node to every sample (vectorised, method 2 = spherical)
+        d <- f_CPRBeam_pos2dist(node_lat[kk], node_lon[kk],
+                                samp_lat, samp_lon, method = 2)
+        
+        keep <- which(d < V_r & !is.na(samp_ab))   # inside radius & has a value
+        if (length(keep) > 0) {
+          dk <- d[keep]
+          ak <- samp_ab[keep]
+          dk[dk == 0] <- 1e-6                  # guard against a sample on the node
+          
+          if (V_nSamp > 0 && length(ak) >= V_nSamp) {
+            o  <- order(dk)[1:V_nSamp]         # keep the V_nSamp nearest
+            dk <- dk[o]
+            ak <- ak[o]
+          }
+          
+          w <- dk^(-power)                     # inverse-distance weights
+          temp_M[kk] <- sum(ak * w) / sum(w)
+        }
+      }
+    }
+    # reshape node vector back to [Lat, Lon] (column-major, matches node ordering)
+    M_Abun_IDW[, , jj, ii] <- matrix(temp_M, nrow = length(V_Lat), ncol = length(V_Lon))
+  }
+}
+
+S_Interp <- list(M_Abun = M_Abun_IDW, M_Lat = M_Lat, M_Lon = M_Lon)
+
+## ------------------------------------------ ##
+#   Graph (IDW)  -----
+## ------------------------------------------ ##
+
+# Collapse 4D -> 2D exactly as before
+M_Map3D_Abun <- apply(S_Interp$M_Abun, c(1, 2, 4), mean, na.rm = TRUE)
+M_Map2D_Abun <- apply(M_Map3D_Abun,    c(1, 2),    mean, na.rm = TRUE)
+M_Map2D_Abun[is.nan(M_Map2D_Abun)] <- NA
+
+grid_idw <- expand.grid(Lat = V_Lat, Lon = V_Lon)
+grid_idw$Abun <- as.vector(M_Map2D_Abun)
+
+# 1) Original data (>= 2000 to match the IDW window)
+ggplot() +
+  geom_point(data = subset(T_Extract, Year >= 2000),
+             aes(Longitude, Latitude, color = log10(CFIN + 1)),
+             size = 2, alpha = 0.5) +
+  scale_color_viridis_c(limits = c(0, 2), oob = squish,
+                        name = expression(log[10]*"(abundance + 1)")) +
+  base_map("Original data (2000-2022)")
+
+# 2) IDW-regularised data
+ggplot() +
+  geom_tile(data = grid_idw,
+            aes(Lon, Lat, fill = log10(Abun + 1)),
+            width = V_Step, height = V_Step) +
+  scale_fill_viridis_c(limits = c(0, 2), oob = squish, na.value = NA,
+                       name = expression(log[10]*"(abundance + 1)")) +
+  base_map("IDW interpolation (r = 50 km)")
+
+## -----------------------------------------------------------------------------
+## Performance note:
+## The IDW block is a faithful translation of the MATLAB nested loops and can be slow. 
+## could replace f_CPRBeam_pos2dist() with a fully vectorised call such as
+## geosphere::distGeo(cbind(node_lon[kk], node_lat[kk]), cbind(samp_lon, samp_lat))
+## which returns meters; divide by 1000 for km.
+## -----------------------------------------------------------------------------
